@@ -40,7 +40,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 RH_API = "https://access.redhat.com/hydra/rest/securitydata/cve/{}.json"
 RH_PAGE = "https://access.redhat.com/security/cve/{}"
@@ -61,7 +61,7 @@ SUBPACKAGE_SUFFIXES = {
     "gnutls", "nss", "openssl", "gcrypt", "debuginfo", "init", "service", "sysinit", "boot",
     "dracut", "oomd", "networkd", "journal", "remote", "binutils", "cpp", "gfortran", "c++",
 }
-MODULE_RE = re.compile(r"^([^:/\s]+):([^-\s]+)-(\d{10,})\.([0-9a-f]{8})$")
+MODULE_RE = re.compile(r"^([^:/\s]+):([^-\s]+)-(\d{10,})\.([0-9a-f]{8}|rhel\d+|\d+)$")
 UA = f"rhel-fixstate/{__version__} (+https://github.com/xuxu298)"
 
 FIELDS = ["agent", "host_os", "cve", "package", "version", "redhat_status",
@@ -267,6 +267,26 @@ def _fixed_row(a):
             "state": "Fix available"}
 
 
+def _same_stream(rows, version, guess):
+    """Rows of the installed module stream, or [] when it cannot be told.
+    The stream is the installed version's major.minor (ruby:2.5) or major (nodejs:18).
+    `guess` is False for binaries matched through their source rpm: rubygems 2.7.6 ships in
+    ruby:2.5, so its own version says nothing about the stream."""
+    streams = {r["stream"] for r in rows}
+    if len(streams) == 1 and not re.fullmatch(r"\d+(\.\d+)?", next(iter(streams))):
+        return rows             # one non-version stream (virt:rhel, idm:DL1): nothing to pick
+    if not guess:
+        return []
+    mm = re.match(r"(?:\d+:)?(\d+)(?:\.(\d+))?", version or "")
+    keys = ([mm.group(1) + "." + mm.group(2)] if mm and mm.group(2) else []) \
+        + ([mm.group(1)] if mm else [])
+    for k in keys:
+        same = [r for r in rows if r["stream"] == k]
+        if same:
+            return same
+    return []
+
+
 def classify(record, major, package, version, sources):
     """Return dict with redhat_status, match, redhat_package, advisory, fixed_version.
     `sources` maps (binary name, RHEL major) -> source package name."""
@@ -281,8 +301,11 @@ def classify(record, major, package, version, sources):
             rows.append(_fixed_row(a))
     for st in record.get("package_state") or []:
         if _major_of(st.get("cpe"), st.get("product_name")) == major:
-            name = (st.get("package_name") or "").split("/")[-1]   # strip module:stream/
+            full = st.get("package_name") or ""
+            ms = re.match(r"([^:/\s]+):([^/\s]+)(?:/|$)", full)    # module:stream[/package]
+            name = full.split("/")[-1] if "/" in full else (ms.group(1) if ms else full)
             rows.append({"kind": "state", "pkg": name, "evr": "", "advisory": "",
+                         "stream": ms.group(2) if ms else "", "label": full,
                          "state": st.get("fix_state") or "Unknown"})
     if not rows:
         out["redhat_status"] = f"No RHEL {major} entry"
@@ -310,6 +333,29 @@ def classify(record, major, package, version, sources):
         else:
             out["redhat_status"] = "Package not matched (" + " / ".join(sorted(states)) + ")"
         return out
+
+    # RHEL 8 modules: Red Hat gives one row per stream (ruby:2.5, ruby:3.0, perl:5.30/perl).
+    # One stream's fix or state never answers for another.
+    streamed = [r for r in hits if r.get("stream")]
+    if streamed:
+        plain = [r for r in hits if not r.get("stream")]
+        if plain and ".module+el" not in (version or ""):
+            hits = plain                # a non-modular build: the plain rows are its own
+        else:
+            hits = _same_stream(streamed, version, out["match"] != "source-rpm")
+            if not hits:
+                out.update(redhat_package=" ".join(sorted({r.get("label") or r["pkg"] + ":" + r["stream"]
+                                                           for r in streamed})),
+                           advisory=" ".join(sorted({r["advisory"] for r in streamed
+                                                     if r["advisory"]})),
+                           redhat_status="Module stream not matched")
+                return out
+    elif ".module+el" in (version or ""):
+        # a module build checked only against non-modular fixes (perl 5.30 vs perl-5.26.3)
+        if any(r["kind"] == "fixed" for r in hits):
+            out.update(redhat_package=" ".join(sorted({r["pkg"] for r in hits})),
+                       redhat_status="Module stream not matched")
+            return out
 
     fixed = [r for r in hits if r["kind"] == "fixed" and r["evr"]]
     if fixed:

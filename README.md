@@ -42,7 +42,8 @@ All 360 *Fix available* rows were on the one host left at RHEL 9.4. The two full
 |---|---|
 | Fix available | Red Hat shipped a fix for this RHEL major (`advisory`, `fixed_version`) and the installed version is older |
 | Fixed version installed | the installed version is at or above Red Hat's fixed build |
-| Fix available (module update, version not compared) | the fix ships as a RHEL 8 module stream (`redhat_package` = `module:stream`); check the advisory |
+| Fix available (module update, version not compared) | the fix ships in the installed module stream (`redhat_package` = `module:stream`); check the advisory |
+| Module stream not matched | RHEL 8/9 module: Red Hat answers per stream, and none of its streams could be tied to the installed build. `redhat_package` lists the streams Red Hat covers (`module:stream` or `module:stream/package`) and `advisory` their advisories; check `dnf module list --enabled` and pick yours. Never another stream's answer |
 | Will not fix, Fix deferred, Affected, Out of support scope, Not affected, … | Red Hat's `fix_state` for this RHEL major; no fix shipped. Several values joined with ` / ` when the matched rows differ |
 | No RHEL N entry | Red Hat has rows for this CVE, none for the host's major version |
 | Not in Red Hat data | Red Hat has no record of the CVE |
@@ -76,7 +77,7 @@ On our lab, with the map every finding matched (`exact` or `source-rpm`). Withou
 - RHEL only. Ubuntu, Debian and other distributions publish their status differently and are not covered.
 - Only the main RHEL stream (`enterprise_linux:<major>`). EUS/AUS/E4S advisories are not considered, so a host on an EUS stream may show *Fix available* for a fix that only exists on the main stream, or miss an EUS-only fix.
 - Red Hat's status is per source package and per major version, not per minor release or per host configuration. *Will not fix* means Red Hat will not ship a fix; whether the finding matters on your host is still your call.
-- Version comparison follows rpm's ordering. When only one side states an epoch, epochs are ignored. RHEL 8 module builds are not version-compared.
+- Version comparison follows rpm's ordering. When only one side states an epoch, epochs are ignored. Module builds are not version-compared. The stream is taken from the installed version's major.minor, else its major (ruby 2.5.9 → ruby:2.5, nodejs 18.19.1 → nodejs:18), only when the package name itself matched; a binary matched through its source rpm (rubygems, npm) carries its own version, so it gets *Module stream not matched*. A module build (`.module+el` in the release) is never checked against a non-modular fix, and a non-modular build is checked only against the non-modular rows.
 
 ## Licence
 
